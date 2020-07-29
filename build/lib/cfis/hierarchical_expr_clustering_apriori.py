@@ -3,7 +3,7 @@ import pickle
 import pandas as pd
 import math
 import matplotlib.pyplot as plt
-from utils import get_tfidf_matrix, dim_reduce_svd
+from _utils import get_tfidf_matrix, dim_reduce_svd
 import collections
 import itertools
 from nltk.probability import FreqDist
