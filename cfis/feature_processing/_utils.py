@@ -1,10 +1,11 @@
 # +
-from nltk.probability import FreqDist
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.probability import FreqDist
 from sklearn.decomposition import TruncatedSVD
-from sklearn.preprocessing import Normalizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import Normalizer
+
 
 def get_phrase_distribution(tok_sentences):
     unigram_distr, bigrams_distr, trigrams_distr = FreqDist(), FreqDist(), FreqDist()
@@ -28,7 +29,7 @@ def remove_rare_words(df, column, rare_words):
     return pd.DataFrame(df[df[column].map(len)>0])
 
 
-def get_tfidf_matrix(docs, min_df = 0.008, max_df = 0.8):
+def get_tfidf_matrix(docs, min_df = 0.008, max_df = 0.8, max_features=None):
     def dummy_fun(doc):
         return doc
 
@@ -39,11 +40,10 @@ def get_tfidf_matrix(docs, min_df = 0.008, max_df = 0.8):
         tokenizer=dummy_fun,
         preprocessor=dummy_fun,
         token_pattern=None,
-        ngram_range=(1,1))
-
+        ngram_range=(1,1),
+        max_features=max_features)
 
     tfidf_matrix = tfidf_vectorizer.fit_transform(docs)
-    print('Vocab_size:', len(tfidf_vectorizer.vocabulary_))
     return tfidf_matrix, tfidf_vectorizer.get_feature_names()
 
 

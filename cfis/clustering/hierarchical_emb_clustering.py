@@ -1,13 +1,11 @@
 from _cluster_utils import *
-from nltk.probability import FreqDist
 import pandas as pd
 import collections
-import logging
-import sys
 import pickle
 import math
 import numpy as np
-from feature_embedding_clustering import get_embedding_cluster_obj, FeatureEmbeddingClustering
+import os
+import tempfile
 
 LOG_FORMAT = '%(asctime)s : %(name)s : %(message)s'
 formatter = logging.Formatter(fmt=LOG_FORMAT)
@@ -42,60 +40,39 @@ class CFIEClustering():
 
         # Final clusters
         self._clusters = {}
-    # %%
 
-    def fit(self, sentence_df, labels_cluster_obj= None, max_features_frac=.20):
-        # select features from extracted candidates
-        max_features = int(max_features_frac*len(sentence_df)) if max_features_frac else None
-        print('Max_features: ', max_features)
-        self.tfidf_matrix, self.tfidf_terms = get_tfidf_matrix(sentence_df.n_grams, max_features=max_features)
+        # Outlier threshold : minimum occurrence of a term doc to occur to form or become a part of main cluster
+        self.outlier_thresh = self.support_threshes[1]
 
-        if labels_cluster_obj:
-            sentence_df['n_grams_emb'] = labels_cluster_obj.transform(sentence_df.n_grams.values) #self.get_embedded_ngrams(sentence_df, labels_cluster_obj)
-            print('Initial tfidf terms :', len(self.tfidf_terms))
-            self.tfidf_matrix, self.tfidf_terms = get_tfidf_matrix(sentence_df.n_grams_emb, max_features=max_features)
-            print('After embedding tfidf terms :', len(self.tfidf_terms), '\n')
-
-        sentence_df['terms_doc'] = load_selected_features(self.tfidf_matrix, self.tfidf_terms)
+    def fit(self, selected_fe_df):
 
         # Closed FI graph construction
-        self._initialize_first_pass(sentence_df['terms_doc'])
-        self._gen_closed_frequent_itemsets(sentence_df['terms_doc'])
+        self._initialize_first_pass(selected_fe_df['terms_doc'])
+        self._gen_closed_frequent_itemsets(selected_fe_df['terms_doc'])
 
         # Get top ranked matches of labels for all the expressions
         logger.info('Get label for each doc...')
-        doc_labels, label_trees, label_docs_map, levelled_labels = self._get_matched_doc_labels(sentence_df)
-        #print(len(levelled_labels), len(sentence_df))
-        assert(len(doc_labels) == len(sentence_df) and len(label_trees)==len(sentence_df) and len(levelled_labels)==len(sentence_df))
-        sentence_df['labels'] = doc_labels
-        sentence_df['labels_tree'] = label_trees
-        sentence_df['levelled_labels'] = levelled_labels
+        doc_labels, label_trees, label_docs_map, levelled_labels = self._get_matched_doc_labels(selected_fe_df)
+
+        assert(len(doc_labels) == len(selected_fe_df) and len(label_trees)==len(selected_fe_df) and len(levelled_labels)==len(selected_fe_df))
+
+        selected_fe_df['labels'] = doc_labels
+        selected_fe_df['labels_tree'] = label_trees
+        selected_fe_df['levelled_labels'] = levelled_labels
 
         self._clusters = label_docs_map
 
         # Postprocessing (if needed)
         logger.info('Postprocessing...' )
-        self.singletons = sentence_df[(~sentence_df.isNoisy) & (sentence_df.labels.map(len)==0)]
+        self.singletons = selected_fe_df[(~selected_fe_df.isNoisy) & (selected_fe_df.labels.map(len)==0)]
         print('Singletons :', len(self.singletons))
 
         logger.info('Final clusters Count : %d, Total docs assigned: %d, Outliers/unassigned: %d.' % (
-            len(self._clusters), len(sentence_df) - len(self.singletons), len(self.singletons)))
+            len(self._clusters), len(selected_fe_df) - len(self.singletons), len(self.singletons)))
 
-        self.cluster_processed_df = sentence_df
+        self.cluster_processed_df = selected_fe_df
 
         return self._clusters
-
-
-    def get_embedded_ngrams(self, sentence_df, labels_cluster_obj=None):
-
-        if labels_cluster_obj is None:
-            leader_threshes = [0.8, 0.7, 0.6, 0.5]
-            member_threshes = [0.7, 0.6, 0.5, 0.4]
-            thresh_pairs = list(zip(leader_threshes, member_threshes))
-
-            labels_cluster_obj = get_embedding_cluster_obj(sentence_df.n_grams.values, thresh_pairs)
-
-        return labels_cluster_obj.transform(sentence_df.n_grams.values)
 
 
     ## --------------------------------- Closed Frequent itemsets Generation ------------------------------ ##
@@ -111,12 +88,14 @@ class CFIEClustering():
 
         #print('max_freq: ', max(one_itemsets.values()))
         if type(self.support_threshes[1]) == float:
-            #self.support_threshes[1] = max(int(self.support_threshes[1] * max_freq / 100), 2)
 
             for level in self.support_threshes.keys():
                 self.support_threshes[level] = max(int(self.support_threshes[level] * max_freq / 100), 2)
 
+            self.outlier_thresh = self.support_threshes[1]
             logger.info(self.support_threshes)
+
+        logger.info('outlier threshold: '+ str(self.outlier_thresh))
 
         logger.info('Initializing 1st level itemsets..')
         self._all_itemsets[1] = one_itemsets
@@ -303,7 +282,7 @@ class CFIEClustering():
                 for s_node in list(fi_graph.successors(label)):
                     if not is_label_cand(doc, s_node):
                         label_tree.add_edge(label, s_node)
-                        successors.add(s_node) #.update(list(fi_graph.successors(label)))
+                        successors.add(s_node)
 
             label_nodes = successors
 
@@ -378,7 +357,7 @@ class CFIEClustering():
 
         return label_tfidf_scores
 
-    def has_positive_label(self, labels):
+    def _has_positive_label(self, labels):
         if len(labels) == 0:
             return False
 
@@ -439,9 +418,6 @@ class CFIEClustering():
         print('\nDocuments with more than %d (max allowed) cluster membership..' % (max_dup_labels))
         print('Out of all assigned: %d, out of assigned positive labels : %d. ' % (overlabelled_count, overlabelled_pos_count))
 
-
-
-
         """
         for overlabelled_doc in overlabelled_pos_docs:
             print(overlabelled_doc[0])
@@ -479,9 +455,8 @@ class CFIEClustering():
                 del self._clusters[label]
 
 
-    def postprocessing_labels(self, max_dup=2, keep_negative=False):
+    def postprocessing_labels(self, max_dup_labels, keep_negative=False):
 
-        max_dup_labels = math.ceil(max_dup * len(self._clusters) / 100) if max_dup else None
         print('Maximum clusters allowed per doc: ', max_dup_labels)
         unassigned_doc_count = 0
         total_initial_assigned_count = 0
@@ -501,11 +476,9 @@ class CFIEClustering():
 
             rejected_labels = set(doc.labels).difference(selected_labels)
 
-           # if len(rejected_labels)>0:
-           #     print('Rejected labels: ', len(rejected_labels))
-
             if len(self.cluster_processed_df.loc[doc_index].labels) > 0 and len(selected_labels)==0:
                 unassigned_doc_count += 1
+
 
             selected_labels_list.loc[doc_index] = selected_labels
 
@@ -542,7 +515,7 @@ class CFIEClustering():
         assigned_count = selected_docs_count - unassigned_count
 
         docs_with_pos_labels = len(doc_labels_df[
-                                            doc_labels_df[label_name].apply(lambda x: self.has_positive_label(x))
+                                            doc_labels_df[label_name].apply(lambda x: self._has_positive_label(x))
                                         ]) - noisy_documents
 
         assigned_count = selected_docs_count - unassigned_count
@@ -559,7 +532,7 @@ class CFIEClustering():
         clusters_count = len(self._clusters)
         singleton_clusters_count =  len(self.singletons)
 
-        cluster_metrics = {'noiseless_documents': selected_docs_count, 'clusters_count':clusters_count,\
+        cluster_metrics = {'clusters_count':clusters_count,\
                            'singleton_clusters_count':singleton_clusters_count, \
                            'unassigned_doc_percent': unassigned_percent, 'assigned_doc_percent':round(100-unassigned_percent,3),\
                            'positive_label_in_assigned': pos_ass_percent, 'positive_label_in_total':pos_ass_total_percent}
@@ -567,184 +540,43 @@ class CFIEClustering():
         return cluster_metrics
 
 
-import mlflow
-import tempfile
+def extract_clusters(processed_sentence_df, support_threshes):
+    print('Input docs count :', len(processed_sentence_df))
 
-def log_mlflow_experiment(experiment_parameters, experiment_metrics, artifacts):
-    mlflow.start_run()
+    cfi = CFIEClustering(support_threshes, False)
+    _ = cfi.fit(processed_sentence_df)
 
-    for k, v in experiment_parameters.items():
-        mlflow.log_param(k, v)
+    return cfi
 
-    for k, v in experiment_metrics.items():
-        if type(v) == str:
-            print(k, v, '*string*')
-            mlflow.log_param(k, v)
-        else:
-            mlflow.log_metric(k, v)
+
+def cl_mlflowrun(selected_features_df, corpus_type, max_dup=2, with_negative_label=False):
+
+    if corpus_type == 'short':
+        support_threshes = {1: 1.5, 2: 0.9, 3: 0.4, 4: 0.2, 5: 0.1} \
+
+    elif corpus_type=='long':
+        support_threshes = {1: 5.0, 2: 4.0, 3: 3.0, 4: 2.0, 5: 1.5}
+
+    else:
+        print('Error: Cannot recognize corpus type :', corpus_type)
+        return
+
+    cfi_obj = extract_clusters(selected_features_df, support_threshes)
+    max_dup_labels = math.ceil(max_dup * len(cfi_obj._clusters) / 100) if max_dup else None
+
+    print('\n\nPostprocessing extra labels ..')
+    cfi_obj.postprocessing_labels(max_dup_labels, keep_negative=with_negative_label)
+
+    cluster_metrics = cfi_obj.evaluate_clusters_quality()
+
+    params_map = {'corpus_type':corpus_type, 'outlier_threshold':cfi_obj.outlier_thresh, \
+                  'max_overlap_percent': max_dup, 'max_labels_per_doc':max_dup_labels, \
+                                                                            'with_negative_label':with_negative_label}
 
     local_dir = tempfile.mkdtemp()
+    cfi_file = os.path.join(local_dir, 'cfi_obj.pkl')
+    pickle.dump(cfi_obj, open(cfi_file, 'wb'))
+    artifacts_map = {'cfi_obj_dir': cfi_file}
 
-    for name, obj in artifacts.items():
-        artifact_pkl = os.path.join(local_dir, name+'.pkl')
-        pickle.dump(obj, open(artifact_pkl, 'wb'))
-        mlflow.log_artifact(artifact_pkl, name)
+    return params_map, cluster_metrics, artifacts_map, cfi_obj
 
-    mlflow.end_run()
-
-import os
-
-def prepare_cluster_setup(corpus_name, emb):
-
-    cluster_dir = '../../sample_data/clustering_results/' + corpus_name + '/'
-
-    if corpus_name == 'Reuters-headline':
-        #max_dup = None
-        #max_features_frac = None
-        support_threshes = {1: 1.5, 2: 0.9, 3: 0.4, 4: 0.2, 5: 0.1}
-        fe_filename = 'feature_extracted_19961119_headline_df.pkl'
-
-    elif corpus_name == 'Reuters-text':
-        #max_dup = 2
-        #max_features_frac = 0.1
-        support_threshes = {1: 5.0, 2: 4.0, 3: 3.0, 4: 2.0, 5: 1.5}
-        fe_filename = 'feature_extracted_19961119_text_df.pkl'
-
-    else:
-        print('Corpus name %s unknown..' % (corpus_name))
-        sys.exit(0)
-
-    input_data_dir = '../../sample_data/processed_data/'
-    processed_sentence_df = pickle.load(open(input_data_dir + fe_filename, 'rb'))
-
-    labels_cluster_obj = None
-
-    if emb is not None:
-        fe_cluster_fname = cluster_dir + 'feature_emb_obj.pkl'
-        print(fe_cluster_fname)
-
-        if os.path.isfile(fe_cluster_fname):
-            print('Found feaure emb obj loading..')
-            labels_cluster_obj = pickle.load(open(fe_cluster_fname, 'rb'))
-        else:
-            print('Did not find feaure emb obj creating..')
-            labels_cluster_obj = get_embedding_cluster_obj(processed_sentence_df.n_grams)
-            pickle.dump(labels_cluster_obj, open(fe_cluster_fname, 'wb'))
-
-    return processed_sentence_df, labels_cluster_obj, support_threshes
-
-
-def extract_clusters(support_threshes, processed_sentence_df, labels_cluster_obj, max_features_frac, max_dup, with_negative):
-    cfi = CFIEClustering(support_threshes, False)
-    clusters = cfi.fit(processed_sentence_df, labels_cluster_obj, max_features_frac=max_features_frac)
-
-    print('Input docs count :', len(processed_sentence_df))
-    print(processed_sentence_df.head())
-    print(processed_sentence_df.columns)
-    print(processed_sentence_df.iloc[0])
-    # print(clusters)
-
-    print('\n\nPostprocessing extra labels ..')
-    cfi.postprocessing_labels(max_dup=max_dup, keep_negative=with_negative)
-    cluster_metrics = cfi.evaluate_clusters_quality()
-
-    cluster_metrics['terms_count'] = len(cfi.tfidf_terms)
-
-    #cluster_dir = '../../sample_data/clustering_results/' + corpus_name + '/'
-    #cfi_filename = 'cfi_emb' if emb else 'cfi' + '_with_neg.pkl' if with_negative else '.pkl'
-
-    #pickle.dump(cfi, open(cluster_dir + cfi_filename, 'wb'))
-
-    return cfi, cluster_metrics
-
-def run_multiple_experiments(corpus_name):
-    #corpus_name = 'Reuters-text'
-    # corpus_name = 'Reuters-headline'
-
-    if corpus_name == 'Reuters-headline':
-        max_dup = None
-        max_features_frac_ops = [None]
-
-    elif corpus_name == 'Reuters-text':
-        max_dup = 2
-        max_features_frac_ops = [None, .3, .2, .1, .05]
-
-    else:
-        print('Corpus name %s unknown..' % (corpus_name))
-        sys.exit(0)
-
-    with_negative_ops = [True, False]
-    emb_ops = [None, 'Fasttext']
-
-    #### TMP #####
-    emb_ops = [None]
-    with_negative_ops = [False]
-    ####################
-
-    for with_negative in with_negative_ops:
-        for emb in emb_ops:
-            for max_features_frac in max_features_frac_ops:
-                processed_sentence_df, labels_cluster_obj, support_threshes = \
-                    prepare_cluster_setup(corpus_name, emb)
-
-                cluster_parameters = {'corpus_name': corpus_name, 'embedding': emb, 'negative_labels': with_negative, \
-                                      'max_features_frac': max_features_frac, 'max_overlap_percent': max_dup}
-
-                cfi_obj, cluster_metrics = extract_clusters(support_threshes, processed_sentence_df, labels_cluster_obj, \
-                                                            max_features_frac, max_dup, with_negative)
-
-                artifacts_map = {'cfi_obj': cfi_obj}
-                print('labels_cluster_obj:', labels_cluster_obj)
-
-                if labels_cluster_obj:
-                    cluster_metrics['feature_count_before_embedding'] = len(labels_cluster_obj.tfidf_feature_names)
-                    cluster_metrics['feature_clusters_count'] = len(labels_cluster_obj.leaders_map)
-                    cluster_metrics['features_singular_count'] = len(labels_cluster_obj.singular_terms)
-                    artifacts_map['feature_emb_obj'] = labels_cluster_obj
-
-                log_mlflow_experiment(cluster_parameters, cluster_metrics, artifacts_map)
-
-
-# %%
-if __name__=='__main__':
-    # support_threshes = {1: 30, 2: 10, 3: 5, 4: 3, 5: 3}
-    max_n = 5
-    support_threshes = {1: 1.5, 2: 0.9, 3: 0.4, 4: 0.2, 5: 0.1}
-    fe_filename = 'feature_extracted_19961119_headline_df.pkl'  # feature_extracted_df.pkl
-    # fe_filename = 'feature_extracted_19961119_text_df.pkl'
-
-    processed_sentence_df = pickle.load(open('../../sample_data/processed_data/' + fe_filename, 'rb'))
-    cluster_fname = 'feature_sb_emb_obj.pkl'
-    label_cluster_obj = pickle.load(open('../../sample_data/clustering_results/Reuters-headline/' + cluster_fname, 'rb'))
-
-
-    cfi = CFIEClustering(support_threshes)
-    clusters = cfi.fit(processed_sentence_df, label_cluster_obj, None)
-
-    print('\n\n')
-    print('Evaluate Clustering quality..')
-    cfi.evaluate_clusters_quality()
-    print('\n\nEvaluate labelling quality..')
-    cfi.evaluate_label_quality(2)
-
-    print('\n\nPostprocessing extra labels ..')
-    cfi.postprocessing_labels()
-
-    print('\n\nEvaluating clustering coverage quality again..')
-    cfi.evaluate_clusters_quality()
-
-    pickle.dump(cfi, open('../../sample_data/clustering_results/Reuters-headline/cluster_sb_emb_obj.pkl', 'wb'))
-
-
-    """
-    print('Stats...')
-    for level in cfi._all_freq_itemsets.keys():
-        if len(cfi._all_freq_itemsets[level].values()) > 0:
-            min_v, max_v = min(cfi._all_freq_itemsets[level].values()), max(cfi._all_freq_itemsets[level].values())
-            print(min_v, max_v, min_v*100/max_v, min_v*100/194, min_v*100/1231)
-
-        #print(level, min(cfi._all_freq_itemsets[level].values()), max(cfi._all_freq_itemsets[level].values()))
-    """
-
-
-    ## Add embedding approach and compare the results

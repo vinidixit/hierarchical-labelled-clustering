@@ -1,8 +1,6 @@
 from nltk.probability import FreqDist
 import logging
 import sys
-import pickle
-import numpy as np
 
 LOG_FORMAT = '%(asctime)s : %(name)s : %(message)s'
 formatter = logging.Formatter(fmt=LOG_FORMAT)
@@ -21,6 +19,7 @@ class LabelNameGenerator:
     def _apply_positions(self, multi_word_key, n_gram):
         positions = []
         for word in multi_word_key:
+           # print(n_gram)
             positions.append(n_gram.index(word))
 
         label = []
@@ -34,7 +33,7 @@ class LabelNameGenerator:
         def exists(label_tree, key):
             return key in label_tree.nodes
 
-        n_grams = self.cluster_processed_df[self.cluster_processed_df.labels_tree.apply(lambda tree: exists(tree, cluster_key))].n_grams
+        n_grams = self.cluster_processed_df[self.cluster_processed_df.labels_tree.apply(lambda tree: exists(tree, cluster_key))].n_grams_emb
 
         if len(n_grams) == 0:
             logger.info('Error: ' + cluster_key + ' does not exist in label graph.')
@@ -56,14 +55,3 @@ class LabelNameGenerator:
 
         return label_preferences[0][0]
 
-if __name__=='__main__':
-    from hierarchical_expr_clustering_apriori import CFIClustering
-    cluster_file = '../../sample_data/clustering_results/cluster_obj.pkl'
-    cluster_obj = pickle.load(open(cluster_file, 'rb'))
-
-    cluster_processed_df = cluster_obj.cluster_processed_df
-
-    lg = LabelNameGenerator(cluster_processed_df)
-    #lg.get_label(('claim', 'fund'))
-    for cluster_key in cluster_obj._clusters.keys():
-        print(cluster_key, ' == ', lg.get_label(cluster_key))

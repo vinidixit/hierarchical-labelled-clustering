@@ -1,4 +1,3 @@
-import gensim
 import itertools
 import nltk
 import spacy
@@ -11,7 +10,7 @@ nlp = spacy.load('en', disable=['parser'])
 
 english_words = set(words.words('en'))
 english_words = set([word.lower() for word in english_words])
-english_words.remove('sap')
+
 
 nltk.download('stopwords')
 
@@ -65,7 +64,6 @@ def lemmatization(sent, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
     doc = nlp(" ".join(sent))
 
     sw_entities = get_named_entities(doc)
-    # print('entities:',sw_entities)
 
     lem_toks = np.array([(token.lemma_.lower(), token.pos_)
                          for token in doc
@@ -76,23 +74,11 @@ def lemmatization(sent, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
                          ])
     return lem_toks
 
+def lemmatization_ticket(sent, allowed_postags=['PROPN','NOUN', 'ADJ', 'VERB', 'ADV']):
+    doc = nlp(" ".join(sent))
 
-def get_bigram_model(tokenized_sents, min_cnt=2, threshold=10):
-    bigram = gensim.models.Phrases(tokenized_sents, min_count=min_cnt, threshold=threshold)
-    bigram_model = gensim.models.phrases.Phraser(bigram)
-    return bigram[tokenized_sents], bigram_model
-
-
-def get_trigram_model(bigrams, min_cnt, threshold):
-    trigram = gensim.models.Phrases(bigrams, min_count=min_cnt, threshold=threshold)
-    return gensim.models.phrases.Phraser(trigram)
-
-
-# +
-def make_bigrams(texts, bigram_model):
-    return [bigram_model[doc] for doc in texts]
-
-
-def make_trigrams(texts, bigram_model, trigram_model):
-    return [trigram_model[bigram_model[doc]] for doc in texts]
-
+    lem_toks = np.array([(token.lemma_.lower(), token.pos_)
+                         for token in doc
+                         if token.pos_ in allowed_postags
+                         ])
+    return lem_toks
