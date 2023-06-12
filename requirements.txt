@@ -19,4 +19,4 @@ snowballstemmer==2.0.0
 sortedcontainers==2.1.0
 spacy==2.2.4
 torch==1.4.0
-transformers==2.8.0
+transformers==4.30.0
